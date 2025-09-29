@@ -1,0 +1,17 @@
+# Ignore generated assets and datasets
+scripts/
+script/
+datasets/
+docs/
+tests/
+wandb/
+*out*/
+*tmp*/
+.claude/
+
+# Python bytecode cache directories
+__pycache__/
+
+# macOS Finder artifacts
+.DS_Store
+._*
