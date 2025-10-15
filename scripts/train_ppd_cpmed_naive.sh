@@ -140,6 +140,7 @@ python train_modular.py \
     --validation_random_seed=${VALIDATION_RANDOM_SEED} \
     --dataloader_num_workers=4 \
     $([ -n "${MAX_TRAIN_USERS}" ] && echo "--max_train_users=${MAX_TRAIN_USERS}") \
+    $([ -n "${TRAIN_USER_FILE}" ] && echo "--train_user_file=${TRAIN_USER_FILE}") \
     $([ -n "${VALIDATION_USER_FILE}" ] && echo "--validation_user_file=${VALIDATION_USER_FILE}")
 
 echo ""

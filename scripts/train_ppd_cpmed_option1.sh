@@ -17,13 +17,13 @@ OUTPUT_DIR="./output/${EXPERIMENT_NAME}"
 
 # Critical Changes for Subtle Differences (Option 1)
 TRAIN_BATCH_SIZE=4
-GRADIENT_ACCUMULATION_STEPS=8     # 1 → 8 (effective batch = 32)
-LEARNING_RATE=3e-6                # 1e-4 → 3e-6 (slower, more precise)
-MAX_TRAIN_STEPS=7500              # 10000 → 7500 (prevent overfitting)
+GRADIENT_ACCUMULATION_STEPS=1
+LEARNING_RATE=2e-5
+MAX_TRAIN_STEPS=10000
 NUM_TRAIN_EPOCHS=100
 
 # DPO Settings - Fine-Grained Optimization
-BETA_DPO=2000                     # 100 → 2000 (amplify small signals)
+BETA_DPO=1000
 LOSS_TYPE="ipo"                   # sigmoid → ipo (prevent saturation)
 
 # Learning Rate Scheduler
@@ -80,9 +80,8 @@ MAX_VALIDATION_BATCHES=1  # Number of validation batches to process (default: 10
 NUM_VALIDATION_IMAGES=4   # Number of validation samples (each becomes one 3x4 grid)
 
 # User Selection Settings (NEW)
-MAX_TRAIN_USERS=""         # [DEPRECATED] Maximum number of training users (empty = use all)
-TRAIN_USER_FILE=""         # Path to JSON file with training response file paths (empty = use all)
-VALIDATION_USER_FILE=""    # Path to JSON file with validation response file paths (empty = use all)
+TRAIN_USER_FILE="./scripts/tmp_train_users.json"         # Path to JSON file with training response file paths (empty = use all)
+VALIDATION_USER_FILE="./scripts/tmp_validation_users.json"    # Path to JSON file with validation response file paths (empty = use all)
 
 # Logging
 REPORT_TO="wandb"

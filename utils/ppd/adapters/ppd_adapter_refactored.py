@@ -129,63 +129,80 @@ class PPDAdapter(nn.Module):
         - If W_last = 0, then ∂L/∂W_first ∝ W_last = 0 (chain rule)
         - This is the root cause of "no learning" issue
 
-        Final Strategy (Pragmatic):
-        - ALL layers: Very small random initialization (1e-4 std)
-        - This produces NEAR-ZERO output (~1e-4 magnitude)
-        - NOT perfect identity, but close enough (error < 0.01%)
-        - Gradients flow properly from step 1
-        - Model quickly learns correct behavior
+        PHASE 3 STRATEGY (2025-10-15): UNIFORM AMPLIFICATION
+        - Problem: Phase 2 (std=1e-2, scale=0.6) → gradient 3.5e-6 (too small!)
+        - Root cause: Small scale parameter multiplies ALL upstream gradients
+        - Solution: Increase ALL stds uniformly + full scale (no blocking)
+
+        New Strategy:
+        - ALL layers: std=0.02 (2x increase from Phase 2)
+        - Scale parameter: 1.0 (full, no gradient attenuation)
+        - Output magnitude: ~1e-3 (acceptable, 0.1% of FLUX)
+        - Gradient magnitude: ~2e-4 (54x improvement!)
+
+        Mathematical Analysis (6-layer cascade):
+        - Gradient scales as (std)^5 → 2x std = 32x gradient
+        - Output scales as (std)^6 → 2x std = 64x output
+        - With scale=1.0 (vs 0.6): additional 1.67x gradient boost
+        - Total: 32 × 1.67 ≈ 54x gradient improvement
 
         Trade-off Analysis:
-        1. Perfect zero (std=0): ✓ Perfect identity, ✗ No gradient flow
-        2. Large init (std=0.02): ✓ Good gradients, ✗ Breaks pretrained model
-        3. Tiny init (std=1e-4): ✓ Near-identity (~99.99%), ✓ Gradient flow ← CHOSEN
-
-        Mathematical Analysis:
-        - Output magnitude: O(std * sqrt(fan_in))
-        - With std=1e-4, fan_in~1000: output ~ 1e-4 * 30 ~ 3e-3
-        - Relative to FLUX outputs (~1.0): error ~ 0.3%
-        - This is acceptable for initial training steps
-
-        Expected Behavior:
-        - Step 0: Small non-zero output (~1e-3), slight model distortion (< 1%)
-        - Step 1-10: Gradients flow, model learns user preferences
-        - Step 50+: Output adapts to user preferences, distortion becomes feature
+        - Identity: 99.99% → 99.84% (PSNR ~22 dB, acceptable for DPO)
+        - Gradient: 3.5e-6 → 1.9e-4 (54x, enables strong learning!)
+        - Weight update: 7e-11 → 3.8e-9 (bf16 representable!)
 
         Why This Works:
-        - Initial small distortion is acceptable (pretrained features robust)
-        - Gradients immediately start flowing
-        - Model learns to produce correct personalized outputs
-        - Final personalized model is SUPPOSED to differ from baseline
+        1. DPO expects model to deviate from reference (identity not critical)
+        2. Larger gradients enable actual learning (mandatory!)
+        3. Output still very small (< 0.2% of FLUX output)
+        4. Uniform scaling keeps all layers balanced
+        5. Full scale removes gradient blocking bottleneck
 
-        CRITICAL: LayerNorm MUST be disabled (use_layer_norm=False)
-        - LayerNorm would amplify small outputs
-        - Breaks the near-identity property
+        Inspired by:
+        - LoRA: Asymmetric init (B=0, A=large) for sequential learning
+        - Zero Conv: Zero init with downstream gradient flow
+        - PPD adaptation: Uniform amplification for cascade balance
 
         Reference:
-        - Strategy A.2 Option 1 (small non-zero init)
-        - Emergency fallback from perfect zero approach
-        - Prioritizes learning over perfect initial identity
+        - Phase 3 strategy: docs/plan/20251015_uniform_amplification.md
+        - Gradient analysis: docs/log/20251015_gradient_fix_phase3.md
+        - Philosophy: docs/confirmed/INITIALIZATION_PHILOSOPHY.md (Phase 3)
         """
         modules_list = list(self.upe_proj.modules())
         linear_modules = [m for m in modules_list if isinstance(m, nn.Linear)]
 
         for i, module in enumerate(linear_modules):
-            # CRITICAL FIX (2025-10-14): Increased from 1e-4 to 1e-2 for gradient flow
-            # Problem: std=1e-4 output (~1e-3) is too small, causes downstream underflow
-            # Solution: std=1e-2 → output ~1e-1, combined with processor (1e-3) → ~1e-7
-            # Trade-off: Initial output ~1e-7 (0.00001% of FLUX) - still near-zero!
-            # This enables sufficient gradient magnitude in bf16 mixed precision
-            # Reference: docs/gradient_zero_fix_strategy.md (2025-10-14)
-            nn.init.normal_(module.weight, mean=0.0, std=1e-2)
+            # PHASE 3.5 FIX (2025-10-15): ULTRA-AGGRESSIVE amplification
+            # Increased from 1e-2 to 0.1 (10x!) for maximum gradient flow
+            # Combined with processor std=0.1 and scale=1.0
+            #
+            # WARNING: This is VERY aggressive!
+            # - Expected output: ~1.0 (same magnitude as FLUX!)
+            # - Identity: ~10% (90% degradation!)
+            # - Gradient: ~0.01 (MASSIVE boost)
+            #
+            # Strategy: "Start far, learn fast"
+            # - Model begins FAR from FLUX identity
+            # - But gradients are HUGE (enables rapid learning)
+            # - DPO should quickly guide model back to quality
+            # - Trades initial chaos for learning speed
+            #
+            # Critical monitoring:
+            # - First 100 steps: Expect wild loss fluctuations
+            # - First 500 steps: PSNR should start recovering
+            # - First 1000 steps: Should see clear improvement trend
+            # - If no recovery by 1000 steps → reduce to std=0.05
+            nn.init.normal_(module.weight, mean=0.0, std=0.1)  # 10x!
 
             # All biases: zero
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
-        logger.info(
-            f"✅ PPDAdapter: All {len(linear_modules)} layers initialized with std=1e-2 "
-            f"(near-zero output ~1e-1, enables gradient flow in cascade)"
+        logger.warning(
+            f"⚠️  PPDAdapter (Phase 3.5 - ULTRA-AGGRESSIVE): "
+            f"All {len(linear_modules)} layers initialized with std=0.1 (10x amplification)! "
+            f"Expected ~3125x gradient improvement but ~90% identity loss initially. "
+            f"Monitor training closely!"
         )
 
     def project_upe(self, user_embeddings: torch.Tensor) -> torch.Tensor:
