@@ -2,6 +2,10 @@
 from transformers import AutoProcessor, AutoModel
 from PIL import Image
 import torch
+import logging
+from typing import List, Union
+
+logger = logging.getLogger(__name__)
 
 # load model
 
@@ -9,15 +13,13 @@ processor_name_or_path = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
 model_pretrained_name_or_path = "yuvalkirstain/PickScore_v1"
 
 
-class Selector():
-    
-    def __init__(self, device):
+class Selector:
+    def __init__(self, device: str) -> None:
         self.device = device
         self.processor = AutoProcessor.from_pretrained(processor_name_or_path)
         self.model = AutoModel.from_pretrained(model_pretrained_name_or_path).eval().to(device)
 
-    def score(self, images, prompt, softmax=False):
-
+    def score(self, images: List[Image.Image], prompt: str, softmax: bool = False) -> List[float]:
         # preprocess
         image_inputs = self.processor(
             images=images,
@@ -35,7 +37,6 @@ class Selector():
             return_tensors="pt",
         ).to(self.device)
 
-
         with torch.no_grad():
             # embed
             image_embs = self.model.get_image_features(**image_inputs)
@@ -45,7 +46,7 @@ class Selector():
             text_embs = text_embs / torch.norm(text_embs, dim=-1, keepdim=True)
 
             # score
-            scores =  (text_embs @ image_embs.T)[0]
+            scores = (text_embs @ image_embs.T)[0]
 
             if softmax:
                 scores = self.model.logit_scale.exp() * scores
@@ -55,7 +56,13 @@ class Selector():
             else:
                 return scores.cpu().tolist()
 
-if __name__ == '__main__':
-    pil_images = [Image.open("my_amazing_images/1.jpg"), Image.open("my_amazing_images/2.jpg")]
-    prompt = "fantastic, increadible prompt"
-    print(calc_probs(prompt, pil_images))
+
+if __name__ == "__main__":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    selector = Selector(device)
+    # Example usage (commented out - requires actual image files)
+    # pil_images = [Image.open("my_amazing_images/1.jpg"), Image.open("my_amazing_images/2.jpg")]
+    # prompt = "fantastic, incredible prompt"
+    # scores = selector.score(pil_images, prompt, softmax=True)
+    # logger.info(f"PickScore probabilities: {scores}")
+    logger.info("PickScore module loaded successfully")

@@ -8,6 +8,7 @@ wandb/
 *out*/
 *tmp*/
 .claude/
+*cache*/
 
 # Python bytecode cache directories
 __pycache__/

@@ -4,10 +4,13 @@ Wraps HuggingFace transformers (https://github.com/huggingface/transformers) mod
 """
 
 import re
+import logging
 
 import torch
 import torch.nn as nn
 from torch import TensorType
+
+logger = logging.getLogger(__name__)
 
 try:
     import transformers
@@ -159,7 +162,10 @@ class HFTextEncoder(nn.Module):
 
         encoder = self.transformer.encoder if hasattr(self.transformer, 'encoder') else self.transformer
         layer_list = getattr(encoder, arch_dict[self.config.model_type]["config_names"]["layer_attr"])
-        print(f"Unlocking {unlocked_layers}/{len(layer_list) + 1} layers of hf model")
+        logger.info("Unlocking layers of HF model", extra={
+            "unlocked_layers": unlocked_layers,
+            "total_layers": len(layer_list) + 1
+        })
         embeddings = getattr(
             self.transformer, arch_dict[self.config.model_type]["config_names"]["token_embeddings_attr"])
         modules = [embeddings, *layer_list][:-unlocked_layers]
