@@ -353,14 +353,24 @@ def train_epoch(
                 from utils.gradient_monitor import monitor_adapter_gradients
                 monitor_adapter_gradients(components["ppd_adapter"], global_step)
 
-            # Monitor log_scale parameters in PPD processors (PHASE 1 monitoring)
+            # Monitor PPD parameters (log_scale + comprehensive weight/gradient monitoring)
             if config.ppd.enable and components.get("ppd_manager") and accelerator.sync_gradients:
-                from utils.ppd.gradient_monitor import monitor_log_scales
+                from utils.ppd.gradient_monitor import monitor_log_scales, monitor_ppd_parameters
 
                 # Monitor every 10 steps
                 if global_step % 10 == 0:
                     # Use accelerator for logging (handles WandB/TensorBoard automatically)
+                    # 1. Log_scale monitoring (detailed layer statistics)
                     log_scale_stats = monitor_log_scales(
+                        ppd_manager=components["ppd_manager"],
+                        step=global_step,
+                        tracker=accelerator if accelerator.is_main_process else None,
+                        log_interval=10,  # Console log every 10 steps
+                    )
+
+                    # 2. Comprehensive parameter monitoring (weights + gradients)
+                    param_stats = monitor_ppd_parameters(
+                        ppd_adapter=components.get("ppd_adapter"),
                         ppd_manager=components["ppd_manager"],
                         step=global_step,
                         tracker=accelerator if accelerator.is_main_process else None,
@@ -461,6 +471,13 @@ def train_epoch(
                         components["ppd_manager"].enable_ppd()
                     else:
                         components["ppd_manager"].disable_ppd()
+
+                # Log training resume with user count
+                if config.ppd.enable and hasattr(dataloader, 'batch_sampler') and hasattr(dataloader.batch_sampler, 'dataset'):
+                    num_users = len(dataloader.batch_sampler.dataset.get_unique_users())
+                    logger.info(f"Resuming training with {num_users} users")
+                else:
+                    logger.info("Resuming training")
 
             # Check if we've reached max steps
             if global_step >= config.training.max_train_steps:

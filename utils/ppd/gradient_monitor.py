@@ -397,14 +397,22 @@ def monitor_log_scales(
             if s['gradient_zero_count'] > 0:
                 logger.warning(f"   ⚠️ {s['gradient_zero_count']} layers have zero gradients!")
 
-        # Show first and last layer details
+        # Show representative layer details: first, 1/3, 2/3, last
         if stats["layer_stats"]:
-            first = stats["layer_stats"][0]
-            last = stats["layer_stats"][-1]
-            first_grad = f"{first['gradient']:.2e}" if first['gradient'] is not None else "None"
-            last_grad = f"{last['gradient']:.2e}" if last['gradient'] is not None else "None"
-            logger.info(f"   Layer 0: log_scale={first['log_scale']:.4f}, scale={first['effective_scale']:.4f}, grad={first_grad}")
-            logger.info(f"   Layer {last['layer']}: log_scale={last['log_scale']:.4f}, scale={last['effective_scale']:.4f}, grad={last_grad}")
+            num_layers = len(stats["layer_stats"])
+            # Calculate representative layer indices
+            layer_indices = [
+                0,                              # First layer
+                num_layers // 3,                # ~1/3 position
+                (num_layers * 2) // 3,          # ~2/3 position
+                num_layers - 1                  # Last layer
+            ]
+
+            for idx in layer_indices:
+                if idx < len(stats["layer_stats"]):
+                    layer = stats["layer_stats"][idx]
+                    grad_str = f"{layer['gradient']:.2e}" if layer['gradient'] is not None else "None"
+                    logger.info(f"   Layer {layer['layer']}: log_scale={layer['log_scale']:.4f}, scale={layer['effective_scale']:.4f}, grad={grad_str}")
 
     # Log to tracker (WandB/TensorBoard) - Only essential metrics
     if tracker is not None and stats["summary"]:
@@ -420,6 +428,202 @@ def monitor_log_scales(
             tracker.log({
                 "ppd/log_scale_grad_mean": s["gradient_mean"],
             }, step=step)
+
+    return stats
+
+
+def monitor_ppd_parameters(
+    ppd_adapter,
+    ppd_manager,
+    step: int,
+    tracker=None,
+    log_interval: int = 10,
+) -> Dict[str, Any]:
+    """
+    Monitor all learnable PPD parameters: weights, gradients, and scales.
+
+    This provides comprehensive training dynamics monitoring:
+    - PPD Adapter (linear layers)
+    - PPD Processors (Q/K/V projections, output projection)
+    - Log_scale parameters
+
+    Args:
+        ppd_adapter: PPDAdapter instance
+        ppd_manager: PPDAdapterManager with processors
+        step: Current training step
+        tracker: Optional accelerator tracker for logging
+        log_interval: Log detailed info every N steps
+
+    Returns:
+        Dictionary with comprehensive parameter statistics
+    """
+    stats = {
+        "step": step,
+        "adapter": {},
+        "processors": {
+            "to_q_upe": {"weight_stats": {}, "grad_stats": {}},
+            "to_k_upe": {"weight_stats": {}, "grad_stats": {}},
+            "to_v_upe": {"weight_stats": {}, "grad_stats": {}},
+            "to_flux_out": {"weight_stats": {}, "grad_stats": {}},
+            "log_scale": {"value_stats": {}, "grad_stats": {}},
+        },
+    }
+
+    # === 1. PPD Adapter Statistics ===
+    adapter_weights = []
+    adapter_grads = []
+
+    if ppd_adapter is not None:
+        for name, param in ppd_adapter.named_parameters():
+            if param.requires_grad:
+                # Weight statistics
+                weight_norm = param.data.norm().item()
+                weight_mean = param.data.mean().item()
+                weight_std = param.data.std().item()
+                adapter_weights.append(weight_norm)
+
+                # Gradient statistics
+                if param.grad is not None:
+                    grad_norm = param.grad.norm().item()
+                    grad_mean = param.grad.mean().item()
+                    adapter_grads.append(grad_norm)
+
+    if adapter_weights:
+        stats["adapter"]["weight_norm_mean"] = sum(adapter_weights) / len(adapter_weights)
+        stats["adapter"]["weight_norm_max"] = max(adapter_weights)
+    if adapter_grads:
+        stats["adapter"]["grad_norm_mean"] = sum(adapter_grads) / len(adapter_grads)
+        stats["adapter"]["grad_norm_max"] = max(adapter_grads)
+
+    # === 2. PPD Processor Statistics ===
+    if hasattr(ppd_manager, 'processors') and ppd_manager.processors:
+        # Collect statistics for each parameter type across all layers
+        param_collections = {
+            "to_q_upe": {"weights": [], "grads": []},
+            "to_k_upe": {"weights": [], "grads": []},
+            "to_v_upe": {"weights": [], "grads": []},
+            "to_flux_out": {"weights": [], "grads": []},
+            "log_scale": {"values": [], "grads": [], "scales": []},
+        }
+
+        for processor in ppd_manager.processors:
+            for param_name, param in processor.named_parameters():
+                if not param.requires_grad:
+                    continue
+
+                # Determine parameter type
+                if "to_q_upe" in param_name:
+                    key = "to_q_upe"
+                elif "to_k_upe" in param_name:
+                    key = "to_k_upe"
+                elif "to_v_upe" in param_name:
+                    key = "to_v_upe"
+                elif "to_flux_out" in param_name:
+                    key = "to_flux_out"
+                elif "log_scale" in param_name:
+                    key = "log_scale"
+                else:
+                    continue
+
+                # Collect weight/value statistics
+                if key == "log_scale":
+                    param_collections[key]["values"].append(param.item())
+                    param_collections[key]["scales"].append(torch.exp(param).item())
+                else:
+                    param_collections[key]["weights"].append(param.data.norm().item())
+
+                # Collect gradient statistics
+                if param.grad is not None:
+                    grad_norm = param.grad.norm().item() if key != "log_scale" else param.grad.item()
+                    param_collections[key]["grads"].append(grad_norm)
+
+        # Compute summary statistics for each parameter type
+        for param_type, data in param_collections.items():
+            if param_type == "log_scale":
+                # Log_scale specific stats
+                if data["values"]:
+                    stats["processors"][param_type]["value_stats"] = {
+                        "min": min(data["values"]),
+                        "max": max(data["values"]),
+                        "mean": sum(data["values"]) / len(data["values"]),
+                    }
+                    stats["processors"][param_type]["scale_stats"] = {
+                        "min": min(data["scales"]),
+                        "max": max(data["scales"]),
+                        "mean": sum(data["scales"]) / len(data["scales"]),
+                    }
+                if data["grads"]:
+                    stats["processors"][param_type]["grad_stats"] = {
+                        "min": min(data["grads"]),
+                        "max": max(data["grads"]),
+                        "mean": sum(data["grads"]) / len(data["grads"]),
+                        "abs_mean": sum(abs(g) for g in data["grads"]) / len(data["grads"]),
+                    }
+            else:
+                # Weight matrix stats
+                if data["weights"]:
+                    stats["processors"][param_type]["weight_stats"] = {
+                        "norm_min": min(data["weights"]),
+                        "norm_max": max(data["weights"]),
+                        "norm_mean": sum(data["weights"]) / len(data["weights"]),
+                    }
+                if data["grads"]:
+                    stats["processors"][param_type]["grad_stats"] = {
+                        "norm_min": min(data["grads"]),
+                        "norm_max": max(data["grads"]),
+                        "norm_mean": sum(data["grads"]) / len(data["grads"]),
+                    }
+
+    # === 3. Logging ===
+    if step % log_interval == 0:
+        logger.info(f"📊 Step {step} PPD Parameter Statistics:")
+
+        # Adapter
+        if stats["adapter"]:
+            logger.info(f"   Adapter:")
+            if "weight_norm_mean" in stats["adapter"]:
+                logger.info(f"      Weights: norm_mean={stats['adapter']['weight_norm_mean']:.4f}, norm_max={stats['adapter']['weight_norm_max']:.4f}")
+            if "grad_norm_mean" in stats["adapter"]:
+                logger.info(f"      Gradients: norm_mean={stats['adapter']['grad_norm_mean']:.2e}, norm_max={stats['adapter']['grad_norm_max']:.2e}")
+
+        # Processors
+        logger.info(f"   Processors (across all {len(ppd_manager.processors) if hasattr(ppd_manager, 'processors') else 0} layers):")
+        for param_type in ["to_q_upe", "to_k_upe", "to_v_upe", "to_flux_out"]:
+            w_stats = stats["processors"][param_type]["weight_stats"]
+            g_stats = stats["processors"][param_type]["grad_stats"]
+            if w_stats and g_stats:
+                logger.info(f"      {param_type}: W_norm={w_stats['norm_mean']:.4f}, G_norm={g_stats['norm_mean']:.2e}")
+
+        # Log_scale (already handled by monitor_log_scales, but include summary here)
+        scale_stats = stats["processors"]["log_scale"].get("scale_stats", {})
+        grad_stats = stats["processors"]["log_scale"].get("grad_stats", {})
+        if scale_stats and grad_stats:
+            logger.info(f"      log_scale: scale_mean={scale_stats['mean']:.4f}, grad_mean={grad_stats['abs_mean']:.2e}")
+
+    # === 4. Tracker Logging (WandB) - Essential metrics only ===
+    if tracker is not None:
+        tracker_metrics = {}
+
+        # Adapter gradients (learning rate proxy)
+        if "grad_norm_mean" in stats["adapter"]:
+            tracker_metrics["ppd/adapter_grad_norm"] = stats["adapter"]["grad_norm_mean"]
+
+        # Processor weight norms (model scale tracking)
+        for param_type in ["to_q_upe", "to_k_upe", "to_v_upe", "to_flux_out"]:
+            w_stats = stats["processors"][param_type]["weight_stats"]
+            if w_stats:
+                tracker_metrics[f"ppd/{param_type}_weight_norm"] = w_stats["norm_mean"]
+
+        # Processor gradient norms (learning dynamics)
+        for param_type in ["to_q_upe", "to_k_upe", "to_v_upe", "to_flux_out"]:
+            g_stats = stats["processors"][param_type]["grad_stats"]
+            if g_stats:
+                tracker_metrics[f"ppd/{param_type}_grad_norm"] = g_stats["norm_mean"]
+
+        # Log_scale metrics (already logged by monitor_log_scales, skip duplication)
+
+        if tracker_metrics:
+            tracker.log(tracker_metrics, step=step)
 
     return stats
 

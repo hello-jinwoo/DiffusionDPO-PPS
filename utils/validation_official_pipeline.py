@@ -128,7 +128,7 @@ class OfficialFluxValidation:
             # Fix for: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
             if hasattr(self.pipeline, 'vae') and self.pipeline.vae is not None:
                 self.pipeline.vae = self.pipeline.vae.to(device=device, dtype=dtype)
-                logger.info(f"   VAE dtype explicitly set to {dtype}")
+                logger.debug(f"   VAE dtype explicitly set to {dtype}")
 
                 # EXTRA SAFETY: Wrap VAE decode to ensure latents match VAE dtype
                 # This prevents dtype mismatches from pipeline's internal operations
@@ -144,7 +144,7 @@ class OfficialFluxValidation:
                     return original_decode(latents, *args, **kwargs)
 
                 self.pipeline.vae.decode = decode_with_dtype_safety
-                logger.info(f"   VAE decode wrapped with dtype safety ({dtype})")
+                logger.debug(f"   VAE decode wrapped with dtype safety ({dtype})")
 
             # Disable progress bar for cleaner logs
             self.pipeline.set_progress_bar_config(disable=True)
@@ -152,14 +152,13 @@ class OfficialFluxValidation:
             # CRITICAL: Apply FluxPPDAttnProcessor if ppd_manager is provided
             # This ensures UPE injection works properly during validation
             if ppd_manager is not None:
-                logger.info("Applying FluxPPDAttnProcessor to validation pipeline...")
+                logger.debug("Applying FluxPPDAttnProcessor to validation pipeline...")
                 self._apply_ppd_processors(ppd_manager)
                 logger.info(f"✅ FluxPPDAttnProcessor applied to {len(ppd_manager.processors)} layers")
             else:
-                logger.info("No PPD manager provided - validation will run without UPE injection")
+                logger.debug("No PPD manager provided - validation will run without UPE injection")
 
             logger.info(f"✅ OfficialFluxValidation initialized successfully")
-            logger.info(f"   Device: {device}, dtype: {dtype}")
         except Exception as e:
             logger.error(f"Failed to initialize FluxKontextPipeline: {e}")
             logger.error("Falling back to legacy validation implementation")
@@ -189,9 +188,9 @@ class OfficialFluxValidation:
 
         # Check if pipeline uses the same transformer object
         is_same_object = (id(pipeline_transformer) == id(manager_transformer))
-        logger.info(f"   Pipeline transformer same as training: {is_same_object}")
-        logger.info(f"   Pipeline transformer id: {id(pipeline_transformer)}")
-        logger.info(f"   Manager transformer id: {id(manager_transformer)}")
+        logger.debug(f"   Pipeline transformer same as training: {is_same_object}")
+        logger.debug(f"   Pipeline transformer id: {id(pipeline_transformer)}")
+        logger.debug(f"   Manager transformer id: {id(manager_transformer)}")
 
         if not is_same_object:
             logger.error(
@@ -206,7 +205,7 @@ class OfficialFluxValidation:
         ppd_count_before = self._count_ppd_processors(pipeline_transformer)
         total_blocks = self._count_total_blocks(pipeline_transformer)
 
-        logger.info(f"   Before re-registration: {ppd_count_before}/{total_blocks} blocks have FluxPPDAttnProcessor")
+        logger.debug(f"   Before re-registration: {ppd_count_before}/{total_blocks} blocks have FluxPPDAttnProcessor")
 
         # CRITICAL FIX: Explicitly re-register processors from ppd_manager
         # The manager's processors list contains processors for ALL blocks (double + single stream)
@@ -226,7 +225,7 @@ class OfficialFluxValidation:
         processor_idx = 0
         if hasattr(pipeline_transformer, 'transformer_blocks'):
             num_double_blocks = len(pipeline_transformer.transformer_blocks)
-            logger.info(f"   Re-registering {num_double_blocks} double-stream processors...")
+            logger.debug(f"   Re-registering {num_double_blocks} double-stream processors...")
 
             for i, block in enumerate(pipeline_transformer.transformer_blocks):
                 if hasattr(block, 'attn'):
@@ -238,7 +237,7 @@ class OfficialFluxValidation:
         # PHASE 2 FIX: Re-register processors to single-stream blocks
         if hasattr(pipeline_transformer, 'single_transformer_blocks'):
             num_single_blocks = len(pipeline_transformer.single_transformer_blocks)
-            logger.info(f"   Re-registering {num_single_blocks} single-stream processors...")
+            logger.debug(f"   Re-registering {num_single_blocks} single-stream processors...")
 
             for i, block in enumerate(pipeline_transformer.single_transformer_blocks):
                 if hasattr(block, 'attn'):
@@ -250,7 +249,7 @@ class OfficialFluxValidation:
         # CRITICAL VERIFICATION: Check that ALL processors are now FluxPPDAttnProcessor
         ppd_count_after = self._count_ppd_processors(pipeline_transformer)
 
-        logger.info(f"   After re-registration: {ppd_count_after}/{total_blocks} blocks have FluxPPDAttnProcessor")
+        logger.debug(f"   After re-registration: {ppd_count_after}/{total_blocks} blocks have FluxPPDAttnProcessor")
 
         if ppd_count_after != total_blocks:
             logger.error(

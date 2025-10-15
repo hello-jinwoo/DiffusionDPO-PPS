@@ -310,22 +310,22 @@ def log_ppd_validation_results(validation_metrics, validation_images, step, acce
         logger.warning("⚠️ WandB not available, skipping validation logging")
         return
 
-    logger.info(f"📊 Logging validation results to WandB at step {step}")
+    logger.debug(f"📊 Logging validation results to WandB at step {step}")
 
     # Log scalar metrics
     if validation_metrics:
-        logger.info(f"  - Logging {len(validation_metrics)} validation metrics")
+        logger.debug(f"  - Logging {len(validation_metrics)} validation metrics")
         log_ppd_metrics(validation_metrics, step, "validation")
     else:
         logger.warning("  - No validation metrics to log")
 
     # Log validation image grids
     if validation_images:
-        logger.info(f"  - Creating image grids from {len(validation_images)} validation samples")
+        logger.debug(f"  - Creating image grids from {len(validation_images)} validation samples")
         try:
             if use_mega_grid:
                 # Option 1: Single mega-grid with all samples (12 rows × 4 cols for 4 samples)
-                logger.info(f"  - Using MEGA-GRID mode: combining all samples into one image")
+                logger.debug(f"  - Using MEGA-GRID mode: combining all samples into one image")
                 mega_grid, combined_caption = create_validation_mega_grid(validation_images)
 
                 if mega_grid is not None:
@@ -336,10 +336,10 @@ def log_ppd_validation_results(validation_metrics, validation_images, step, acce
                             caption=full_caption
                         )
                     }, step=step)
-                    logger.info(f"  - Logged 1 mega-grid ({mega_grid.size[0]}×{mega_grid.size[1]}) containing {len(validation_images)} samples")
+                    logger.debug(f"  - Logged 1 mega-grid ({mega_grid.size[0]}×{mega_grid.size[1]}) containing {len(validation_images)} samples")
             else:
                 # Option 2: Separate grids for each sample (original behavior)
-                logger.info(f"  - Using SEPARATE-GRID mode: one grid per sample")
+                logger.debug(f"  - Using SEPARATE-GRID mode: one grid per sample")
                 image_grids = create_validation_image_grid(validation_images)
 
                 for idx, (grid, caption, perturbation_info) in enumerate(image_grids):
@@ -354,7 +354,7 @@ def log_ppd_validation_results(validation_metrics, validation_images, step, acce
                             caption=full_caption
                         )
                     }, step=step)
-                logger.info(f"  - Logged {len(image_grids)} separate validation image grids")
+                logger.debug(f"  - Logged {len(image_grids)} separate validation image grids")
         except Exception as e:
             logger.error(f"  - Error creating validation image grids: {e}")
             import traceback
@@ -385,11 +385,11 @@ def log_ppd_validation_results(validation_metrics, validation_images, step, acce
             }
 
             wandb.log(metric_summary, step=step)
-            logger.info(f"  - Logged summary statistics")
+            logger.debug(f"  - Logged summary statistics")
         except Exception as e:
             logger.error(f"  - Error logging summary statistics: {e}")
 
-    logger.info("✅ Validation logging completed")
+    logger.debug("✅ Validation logging completed")
 
 
 def create_training_summary_chart(metrics_history):
