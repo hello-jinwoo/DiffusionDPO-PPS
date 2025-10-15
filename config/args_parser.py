@@ -125,13 +125,15 @@ def parse_args():
     parser.add_argument(
         "--num_train_epochs",
         type=int,
-        default=100
+        default=100,
+        help="[DEPRECATED] Number of training epochs. Use --max_train_steps instead. "
+             "This parameter is kept for backward compatibility only and will be removed in v2.0.",
     )
     parser.add_argument(
         "--max_train_steps",
         type=int,
-        default=None,
-        help="Total number of training steps to perform. If provided, overrides num_train_epochs.",
+        default=10000,
+        help="Total number of training steps to perform. This is the primary termination condition.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -759,6 +761,17 @@ def parse_args():
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
+
+    # Deprecation warning for num_train_epochs
+    import warnings
+    if args.num_train_epochs != 100:  # Non-default value means user explicitly set it
+        warnings.warn(
+            "The --num_train_epochs parameter is deprecated and will be removed in v2.0. "
+            "Training now terminates based solely on --max_train_steps. "
+            f"Your training will run for {args.max_train_steps} steps regardless of num_train_epochs.",
+            DeprecationWarning,
+            stacklevel=2
+        )
 
     # Validate PPD arguments
     if args.ppd_enable:

@@ -20,8 +20,7 @@ OUTPUT_DIR="./output/${EXPERIMENT_NAME}"
 TRAIN_BATCH_SIZE=2
 GRADIENT_ACCUMULATION_STEPS=2
 LEARNING_RATE=1e-4
-MAX_TRAIN_STEPS=10000
-NUM_TRAIN_EPOCHS=100
+MAX_TRAIN_STEPS=10000  # Training terminates after this many steps
 
 # DPO Settings
 BETA_DPO=100
@@ -122,7 +121,6 @@ python train_modular.py \
     --gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} \
     --learning_rate=${LEARNING_RATE} \
     --max_train_steps=${MAX_TRAIN_STEPS} \
-    --num_train_epochs=${NUM_TRAIN_EPOCHS} \
     --lr_scheduler="${LR_SCHEDULER}" \
     --lr_warmup_steps=${LR_WARMUP_STEPS} \
     --max_grad_norm=${MAX_GRAD_NORM} \

@@ -73,8 +73,8 @@ class TrainingConfig:
     output_dir: str = "sd-model-finetuned"
     cache_dir: Optional[str] = None
     seed: Optional[int] = None
-    num_train_epochs: int = 100
-    max_train_steps: Optional[int] = None
+    num_train_epochs: int = 100  # DEPRECATED: Use max_train_steps instead. Kept for backward compatibility only.
+    max_train_steps: int = 10000  # Total number of training steps (REQUIRED - this is the primary termination condition)
     gradient_accumulation_steps: int = 1
     mixed_precision: Optional[str] = None
     allow_tf32: bool = False

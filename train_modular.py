@@ -528,12 +528,12 @@ def main():
                        f"{torch.cuda.max_memory_allocated() / 1e9:.2f} GB (max)")
             torch.cuda.reset_peak_memory_stats()
 
-    # Calculate training steps
+    # Calculate number of epochs needed (for logging purposes only)
     num_update_steps_per_epoch = math.ceil(
         len(train_dataloader) / config.training.gradient_accumulation_steps
     )
-    if config.training.max_train_steps is None:
-        config.training.max_train_steps = config.training.num_train_epochs * num_update_steps_per_epoch
+    # Training terminates solely based on max_train_steps
+    estimated_epochs = math.ceil(config.training.max_train_steps / num_update_steps_per_epoch)
 
     # Build training pipeline (FLUX + Adapter)
     # NOTE: ppd_provider is passed here but feature extractors are already unloaded
@@ -612,11 +612,11 @@ def main():
     # Training loop
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataloader.dataset)}")
-    logger.info(f"  Num Epochs = {config.training.num_train_epochs}")
+    logger.info(f"  Estimated epochs = ~{estimated_epochs} (based on {num_update_steps_per_epoch} steps/epoch)")
     logger.info(f"  Instantaneous batch size per device = {config.data.train_batch_size}")
     logger.info(f"  Total train batch size = {config.data.train_batch_size * accelerator.num_processes * config.training.gradient_accumulation_steps}")
     logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
-    logger.info(f"  Total optimization steps = {config.training.max_train_steps}")
+    logger.info(f"  Total optimization steps = {config.training.max_train_steps} (PRIMARY TERMINATION CONDITION)")
 
     # Progress bar
     progress_bar = tqdm(
@@ -652,8 +652,10 @@ def main():
         logger.info("Expected: PSNR > 35 dB for proper zero-initialization")
         logger.info("=" * 60)
 
-    # Train
-    for epoch in range(config.training.num_train_epochs):
+    # Train (loop until max_train_steps is reached)
+    # NOTE: We use an infinite loop and break based on global_step
+    epoch = 0
+    while global_step < config.training.max_train_steps:
         global_step = train_epoch(
             epoch=epoch,
             dataloader=train_dataloader,
@@ -666,16 +668,12 @@ def main():
             validation_manager=validation_manager
         )
 
-        # FIXED: Removed duplicate epoch-end validation call
-        # This was causing validation to run twice at the same step when:
-        # - global_step % validation_steps == 0 (e.g., step 1500)
-        # - AND epoch % validation_epochs == 0 (e.g., epoch 5)
-        # The step-based validation in train_epoch() at line 394 already handles all cases.
-        # Epoch-based validation should only be a fallback when validation_steps is not set.
-
-        # Check if we've reached max steps
+        # Check if we've reached max steps (train_epoch may have hit the limit mid-epoch)
         if global_step >= config.training.max_train_steps:
+            logger.info(f"Reached max_train_steps ({config.training.max_train_steps}). Training complete.")
             break
+
+        epoch += 1
 
     # Save final model
     if accelerator.is_main_process:
