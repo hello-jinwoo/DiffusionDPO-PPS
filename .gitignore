@@ -1,6 +1,4 @@
 # Ignore generated assets and datasets
-scripts/
-script/
 datasets/
 docs/
 tests/
