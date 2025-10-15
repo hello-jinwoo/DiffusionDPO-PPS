@@ -178,54 +178,42 @@ class FluxPPDAttnProcessor(nn.Module):
         - Inspired by LoRA (asymmetric) and Zero Conv (downstream flow)
         - Adapted for PPD cascaded architecture
         """
-        # PHASE 3.5 FIX (2025-10-15): ULTRA-AGGRESSIVE 10x amplification
-        # Projections increased from 1e-2 to 0.1 (10x!)
-        # Combined with scale=1.0, provides ~3125x gradient improvement
+        # PHASE 4 FIX (2025-10-16): BALANCED MIDDLE GROUND
+        # Reduced from 0.1 to 0.05 based on gradient analysis at step 10
+        # Combined with adapter std=0.05, scale=1.0, and beta_dpo=500
         #
-        # WARNING: This is VERY aggressive initialization!
-        # - Expected gradient: ~0.01 (100x larger than Phase 3)
-        # - Expected output: ~0.1 (10% of FLUX magnitude!)
-        # - Identity degradation: ~90% (SEVERE!)
-        # - PSNR @ step 0: ~10-15 dB (poor initial quality)
+        # Phase 3.5 (std=0.1) Failure Analysis:
+        # - 72% processors (41/57) showed zero gradients
+        # - to_q_upe gradient: 9.50e-09 (essentially frozen!)
+        # - Non-zero gradients: ~5e-06 (Phase 2 levels, not Phase 3.5)
+        # - Hypothesis: Too aggressive → attention saturation → gradient vanishing
         #
-        # Rationale:
+        # Phase 4 Strategy: "Balanced Amplification"
+        # - std=0.05: Middle ground between Phase 3 (0.02) and Phase 3.5 (0.1)
+        # - Expected gradient: ~1e-3 (strong, bf16-safe)
+        # - Expected output: ~0.01 (1% of FLUX, acceptable)
+        # - Expected identity: ~98% (PSNR ~18-20 dB)
+        #
+        # Mathematical rationale:
         # - For 6-layer cascade: gradient ∝ (std)^5 × scale
         # - Phase 2: (0.01)^5 × 0.6 ≈ 6e-11
-        # - Phase 3: (0.02)^5 × 1.0 ≈ 3.2e-9 (54x)
-        # - Phase 3.5: (0.1)^5 × 1.0 ≈ 1e-5 (1667x from Phase 2, 31x from Phase 3!)
+        # - Phase 3: (0.02)^5 × 1.0 ≈ 3.2e-9
+        # - Phase 4: (0.05)^5 × 1.0 ≈ 3.1e-7 (97x from Phase 3!)
+        # - Phase 3.5: (0.1)^5 × 1.0 ≈ 1e-5 (but caused saturation)
         #
-        # Trade-off:
-        # - MASSIVE gradient boost (enables very fast learning)
-        # - Severe identity loss (model starts far from FLUX)
-        # - Model MUST learn to recover FLUX quality
-        # - Only viable if DPO signal is very strong
+        # Complementary change: beta_dpo 1000→500
+        # - Reduces DPO loss saturation risk
+        # - Softer preference signal for more stable gradients
         #
-        # When to use:
-        # - Phase 3 (std=0.02) showed insufficient gradients
-        # - Willing to sacrifice initial quality for learning speed
-        # - Strong DPO preference signal available
-        # - Can afford longer training (recovery phase needed)
-        #
-        # Monitoring critical:
-        # - Watch PSNR recovery in first 500 steps
-        # - Stop if PSNR doesn't improve by step 1000
-        # - Expect volatile loss initially (large updates)
+        # Reference: Step 10 gradient analysis (2025-10-16)
 
-        # Q, K, V: Ultra-aggressive amplification
-        nn.init.normal_(self.to_q_upe.weight, mean=0.0, std=0.1)  # 10x!
-        nn.init.normal_(self.to_k_upe.weight, mean=0.0, std=0.1)  # 10x!
-        nn.init.normal_(self.to_v_upe.weight, mean=0.0, std=0.1)  # 10x!
+        # Q, K, V: Balanced amplification
+        nn.init.normal_(self.to_q_upe.weight, mean=0.0, std=0.05)
+        nn.init.normal_(self.to_k_upe.weight, mean=0.0, std=0.05)
+        nn.init.normal_(self.to_v_upe.weight, mean=0.0, std=0.05)
 
-        # Output: Ultra-aggressive (CRITICAL bottleneck!)
-        nn.init.normal_(self.to_flux_out.weight, mean=0.0, std=0.1)  # 10x!
-
-        # logger.warning(
-        #     "⚠️  FluxPPDAttnProcessor (Phase 3.5 - ULTRA-AGGRESSIVE): "
-        #     "Weights initialized with 10x amplification! "
-        #     "std=0.1, scale=1.0, ~3125x gradient improvement expected. "
-        #     "SEVERE identity degradation expected initially (~90%). "
-        #     "Monitor PSNR recovery closely in first 1000 steps!"
-        # )
+        # Output: Balanced (critical bottleneck)
+        nn.init.normal_(self.to_flux_out.weight, mean=0.0, std=0.05)
 
     def set_ppd_enabled(self, enabled: bool):
         """

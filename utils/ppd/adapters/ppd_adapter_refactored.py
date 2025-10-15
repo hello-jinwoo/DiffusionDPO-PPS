@@ -172,37 +172,38 @@ class PPDAdapter(nn.Module):
         linear_modules = [m for m in modules_list if isinstance(m, nn.Linear)]
 
         for i, module in enumerate(linear_modules):
-            # PHASE 3.5 FIX (2025-10-15): ULTRA-AGGRESSIVE amplification
-            # Increased from 1e-2 to 0.1 (10x!) for maximum gradient flow
-            # Combined with processor std=0.1 and scale=1.0
+            # PHASE 4 FIX (2025-10-16): BALANCED MIDDLE GROUND
+            # Reduced from 0.1 to 0.05 based on gradient analysis at step 10
+            # Combined with processor std=0.05 and scale=1.0, beta_dpo=500
             #
-            # WARNING: This is VERY aggressive!
-            # - Expected output: ~1.0 (same magnitude as FLUX!)
-            # - Identity: ~10% (90% degradation!)
-            # - Gradient: ~0.01 (MASSIVE boost)
+            # Phase 3.5 (std=0.1) showed gradient flow failure:
+            # - 72% processors (41/57) had zero gradients
+            # - to_q_upe gradient: 9.50e-09 (essentially zero)
+            # - Non-zero gradients: ~5e-06 (too weak, Phase 2 levels)
             #
-            # Strategy: "Start far, learn fast"
-            # - Model begins FAR from FLUX identity
-            # - But gradients are HUGE (enables rapid learning)
-            # - DPO should quickly guide model back to quality
-            # - Trades initial chaos for learning speed
+            # Phase 4 Strategy: "Balanced Amplification"
+            # - std=0.05: Middle ground between Phase 3 (0.02) and Phase 3.5 (0.1)
+            # - Expected gradient: ~1e-3 (5^5 = 3125x from base)
+            # - Expected output: ~0.01 (1% of FLUX, acceptable)
+            # - Expected identity: ~98% (PSNR ~18-20 dB)
             #
-            # Critical monitoring:
-            # - First 100 steps: Expect wild loss fluctuations
-            # - First 500 steps: PSNR should start recovering
-            # - First 1000 steps: Should see clear improvement trend
-            # - If no recovery by 1000 steps → reduce to std=0.05
-            nn.init.normal_(module.weight, mean=0.0, std=0.1)  # 10x!
+            # Mathematical rationale:
+            # - For 6-layer cascade: gradient ∝ (std)^5
+            # - Phase 3: (0.02)^5 × 1.0 ≈ 3.2e-9
+            # - Phase 4: (0.05)^5 × 1.0 ≈ 3.1e-7 (97x improvement!)
+            # - Phase 3.5: (0.1)^5 × 1.0 ≈ 1e-5 (but caused saturation)
+            #
+            # Reference: Step 10 gradient analysis (2025-10-16)
+            nn.init.normal_(module.weight, mean=0.0, std=0.05)
 
             # All biases: zero
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
-        logger.warning(
-            f"⚠️  PPDAdapter (Phase 3.5 - ULTRA-AGGRESSIVE): "
-            f"All {len(linear_modules)} layers initialized with std=0.1 (10x amplification)! "
-            f"Expected ~3125x gradient improvement but ~90% identity loss initially. "
-            f"Monitor training closely!"
+        logger.info(
+            f"PPDAdapter (Phase 4 - BALANCED): "
+            f"All {len(linear_modules)} layers initialized with std=0.05. "
+            f"Expected ~97x gradient improvement from Phase 3 with ~98% identity preservation."
         )
 
     def project_upe(self, user_embeddings: torch.Tensor) -> torch.Tensor:

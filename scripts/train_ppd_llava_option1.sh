@@ -24,7 +24,12 @@ LEARNING_RATE=2e-5
 MAX_TRAIN_STEPS=10000  # Training terminates after this many steps
 
 # DPO Settings - Fine-Grained Optimization
-BETA_DPO=1000
+# PHASE 4 FIX (2025-10-16): Reduced from 1000 to 500
+# Reason: Phase 3.5 (beta=1000) caused gradient saturation
+# - 72% processors showed zero gradients at step 10
+# - Lower beta reduces saturation risk, enables stable gradients
+# Reference: Step 10 gradient analysis + std=0.05 reduction
+BETA_DPO=500
 LOSS_TYPE="ipo"                   # sigmoid → ipo (prevent saturation)
 
 # Learning Rate Scheduler
