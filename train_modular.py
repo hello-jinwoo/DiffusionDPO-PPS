@@ -328,6 +328,12 @@ def train_epoch(
         # For PPD adapter-only mode, accumulate on adapter instead of model
         accumulate_module = components.get("ppd_adapter") if (config.ppd.enable and components.get("ppd_adapter")) else model
 
+        # Enable UPE contribution monitoring before forward pass
+        if config.ppd.enable and components.get("ppd_manager") and global_step % 10 == 0:
+            for processor in components["ppd_manager"].processors:
+                if hasattr(processor, 'enable_monitoring'):
+                    processor.enable_monitoring()
+
         with accelerator.accumulate(accumulate_module):
             # Run training step
             loss, metrics = dpo_engine.training_step(
@@ -355,7 +361,7 @@ def train_epoch(
 
             # Monitor PPD parameters (log_scale + comprehensive weight/gradient monitoring)
             if config.ppd.enable and components.get("ppd_manager") and accelerator.sync_gradients:
-                from utils.ppd.gradient_monitor import monitor_log_scales, monitor_ppd_parameters
+                from utils.ppd.gradient_monitor import monitor_log_scales, monitor_ppd_parameters, monitor_upe_contribution
 
                 # Monitor every 10 steps
                 if global_step % 10 == 0:
@@ -376,6 +382,19 @@ def train_epoch(
                         tracker=accelerator if accelerator.is_main_process else None,
                         log_interval=10,  # Console log every 10 steps
                     )
+
+                    # 3. UPE contribution monitoring (output magnitudes and deltas)
+                    upe_stats = monitor_upe_contribution(
+                        ppd_manager=components["ppd_manager"],
+                        step=global_step,
+                        tracker=accelerator if accelerator.is_main_process else None,
+                        log_interval=10,  # Console log every 10 steps
+                    )
+
+                    # Disable monitoring after collecting stats
+                    for processor in components["ppd_manager"].processors:
+                        if hasattr(processor, 'disable_monitoring'):
+                            processor.disable_monitoring()
 
             # Gradient clipping
             if accelerator.sync_gradients:

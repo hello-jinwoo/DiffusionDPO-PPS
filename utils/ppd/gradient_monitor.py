@@ -662,6 +662,178 @@ def measure_upe_contribution(
         }
 
 
+def monitor_upe_contribution(
+    ppd_manager,
+    step: int,
+    tracker=None,
+    log_interval: int = 10,
+) -> Dict[str, Any]:
+    """
+    Monitor UPE contribution to FLUX outputs across all layers.
+
+    This function tracks how UPE adapter affects FLUX's intermediate outputs:
+    - user_attn: UPE cross-attention output (before projection to FLUX space)
+    - user_attn_output: Scaled UPE contribution added to FLUX
+    - image_output: Original FLUX output
+    - final_output: Combined output (image + UPE)
+    - delta: Change magnitude (final - original)
+
+    Args:
+        ppd_manager: PPDAdapterManager instance with registered processors
+        step: Current training step
+        tracker: Optional accelerator tracker for logging (WandB/TensorBoard)
+        log_interval: Log detailed info every N steps
+
+    Returns:
+        Dictionary with UPE contribution statistics
+    """
+    if not hasattr(ppd_manager, 'processors') or not ppd_manager.processors:
+        logger.warning(f"⚠️ Step {step}: No processors found in PPDAdapterManager")
+        return {}
+
+    stats = {
+        "step": step,
+        "layer_stats": [],
+        "summary": {},
+    }
+
+    # Collect stats from all processors
+    user_attn_norms = []
+    user_attn_output_norms = []
+    image_output_norms = []
+    final_output_norms = []
+    delta_norms = []
+    contribution_ratios = []
+
+    for i, processor in enumerate(ppd_manager.processors):
+        if hasattr(processor, 'get_monitor_stats'):
+            monitor_stats = processor.get_monitor_stats()
+
+            if monitor_stats is not None:
+                # Extract norms
+                user_attn_norm = monitor_stats.get("user_attn_norm", 0.0)
+                user_attn_output_norm = monitor_stats.get("user_attn_output_norm", 0.0)
+                image_output_norm = monitor_stats.get("image_output_norm", 0.0)
+                final_output_norm = monitor_stats.get("final_output_norm", 0.0)
+                delta_norm = monitor_stats.get("delta_norm", 0.0)
+
+                # Compute contribution ratio
+                contribution_ratio = (
+                    (user_attn_output_norm / (image_output_norm + 1e-8)) * 100.0
+                    if image_output_norm > 0 else 0.0
+                )
+
+                # Store per-layer stats
+                layer_stat = {
+                    "layer": i,
+                    "user_attn_norm": user_attn_norm,
+                    "user_attn_output_norm": user_attn_output_norm,
+                    "image_output_norm": image_output_norm,
+                    "final_output_norm": final_output_norm,
+                    "delta_norm": delta_norm,
+                    "contribution_ratio": contribution_ratio,
+                }
+                stats["layer_stats"].append(layer_stat)
+
+                # Collect for summary
+                user_attn_norms.append(user_attn_norm)
+                user_attn_output_norms.append(user_attn_output_norm)
+                image_output_norms.append(image_output_norm)
+                final_output_norms.append(final_output_norm)
+                delta_norms.append(delta_norm)
+                contribution_ratios.append(contribution_ratio)
+
+    # Compute summary statistics
+    if user_attn_output_norms:
+        stats["summary"] = {
+            "num_layers": len(user_attn_output_norms),
+            # User attention (before FLUX projection)
+            "user_attn_mean": sum(user_attn_norms) / len(user_attn_norms),
+            "user_attn_min": min(user_attn_norms),
+            "user_attn_max": max(user_attn_norms),
+            # UPE contribution (scaled, after FLUX projection)
+            "upe_contribution_mean": sum(user_attn_output_norms) / len(user_attn_output_norms),
+            "upe_contribution_min": min(user_attn_output_norms),
+            "upe_contribution_max": max(user_attn_output_norms),
+            # Image output (original FLUX)
+            "image_output_mean": sum(image_output_norms) / len(image_output_norms),
+            "image_output_min": min(image_output_norms),
+            "image_output_max": max(image_output_norms),
+            # Final output (combined)
+            "final_output_mean": sum(final_output_norms) / len(final_output_norms),
+            "final_output_min": min(final_output_norms),
+            "final_output_max": max(final_output_norms),
+            # Delta (final - original)
+            "delta_mean": sum(delta_norms) / len(delta_norms),
+            "delta_min": min(delta_norms),
+            "delta_max": max(delta_norms),
+            # Contribution ratio (%)
+            "contribution_ratio_mean": sum(contribution_ratios) / len(contribution_ratios),
+            "contribution_ratio_min": min(contribution_ratios),
+            "contribution_ratio_max": max(contribution_ratios),
+        }
+
+    # Log to console at specified interval
+    if step % log_interval == 0 and stats["summary"]:
+        s = stats["summary"]
+        logger.info(f"📊 Step {step} UPE Contribution Statistics:")
+        logger.info(f"   Layers: {s['num_layers']}")
+        logger.info(f"   Magnitudes (mean across layers):")
+        logger.info(f"      Image output (original): {s['image_output_mean']:.4f}")
+        logger.info(f"      UPE contribution: {s['upe_contribution_mean']:.4f} ({s['contribution_ratio_mean']:.2f}% of image)")
+        logger.info(f"      Delta (final - original): {s['delta_mean']:.4f} ({s['contribution_ratio_mean']:.2f}% of image)")
+        logger.info(f"      Final output: {s['final_output_mean']:.4f}")
+
+        # Show representative layer details: first, 1/3, 2/3, last
+        if stats["layer_stats"]:
+            num_layers = len(stats["layer_stats"])
+            layer_indices = [
+                0,                              # First layer
+                num_layers // 3,                # ~1/3 position
+                (num_layers * 2) // 3,          # ~2/3 position
+                num_layers - 1                  # Last layer
+            ]
+
+            logger.info(f"   Representative layers:")
+            for idx in layer_indices:
+                if idx < len(stats["layer_stats"]):
+                    layer = stats["layer_stats"][idx]
+                    logger.info(
+                        f"      Layer {layer['layer']}: "
+                        f"img={layer['image_output_norm']:.4f}, "
+                        f"upe={layer['user_attn_output_norm']:.4f}, "
+                        f"delta={layer['delta_norm']:.4f}, "
+                        f"final={layer['final_output_norm']:.4f}, "
+                        f"ratio={layer['contribution_ratio']:.2f}%"
+                    )
+
+            # Verification: delta should approximately equal upe_contribution
+            delta_upe_diff = abs(s['delta_mean'] - s['upe_contribution_mean'])
+            if delta_upe_diff < 1e-4:
+                logger.info(f"   ✅ Verification: delta ≈ upe_contribution (residual consistency)")
+            else:
+                logger.warning(f"   ⚠️ Warning: delta ({s['delta_mean']:.4f}) != upe ({s['upe_contribution_mean']:.4f}), diff={delta_upe_diff:.2e}")
+
+    # Log to tracker (WandB/TensorBoard) - Essential metrics only
+    if tracker is not None and stats["summary"]:
+        s = stats["summary"]
+
+        tracker_metrics = {
+            # Original FLUX output magnitude
+            "ppd/image_output_mean": s["image_output_mean"],
+            # UPE contribution magnitude
+            "ppd/upe_contribution_mean": s["upe_contribution_mean"],
+            # Delta magnitude (should equal UPE contribution)
+            "ppd/delta_mean": s["delta_mean"],
+            # Contribution ratio (%)
+            "ppd/upe_ratio_mean": s["contribution_ratio_mean"],
+        }
+
+        tracker.log(tracker_metrics, step=step)
+
+    return stats
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logger.info("✅ Gradient monitoring utilities loaded")

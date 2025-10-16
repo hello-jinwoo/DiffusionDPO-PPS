@@ -64,6 +64,10 @@ class FluxPPDAttnProcessor(nn.Module):
         self.num_upe_tokens = num_upe_tokens
         self.enable_ppd = enable_ppd
 
+        # Monitoring: Store intermediate magnitudes for analysis
+        self._monitoring_enabled = False
+        self._monitor_stats = None
+
         # Compute head dimension for UPE attention (in compact space)
         assert upe_hidden_dim % num_heads == 0, \
             f"upe_hidden_dim ({upe_hidden_dim}) must be divisible by num_heads ({num_heads})"
@@ -224,6 +228,22 @@ class FluxPPDAttnProcessor(nn.Module):
                      If False, bypass UPE (reference mode)
         """
         self.enable_ppd = enabled
+
+    def enable_monitoring(self):
+        """Enable monitoring of intermediate outputs for analysis."""
+        self._monitoring_enabled = True
+
+    def disable_monitoring(self):
+        """Disable monitoring of intermediate outputs."""
+        self._monitoring_enabled = False
+
+    def get_monitor_stats(self):
+        """Get monitoring statistics from last forward pass."""
+        return self._monitor_stats
+
+    def clear_monitor_stats(self):
+        """Clear monitoring statistics."""
+        self._monitor_stats = None
 
     def __call__(
         self,
@@ -386,6 +406,23 @@ class FluxPPDAttnProcessor(nn.Module):
 
         # Combine: output = original + scale * user_attn
         final_output = image_output + user_attn_output
+
+        # ============================================================================
+        # MONITORING: Capture intermediate magnitudes (no gradients)
+        # ============================================================================
+        if self._monitoring_enabled:
+            with torch.no_grad():
+                # Compute delta (should equal user_attn_output for residual connection)
+                delta = final_output - image_output
+
+                # Compute Frobenius norms (mean over batch dimension)
+                self._monitor_stats = {
+                    "user_attn_norm": user_attn.norm(dim=-1).mean().item() if self.enable_ppd and upe_hidden_states is not None else 0.0,
+                    "user_attn_output_norm": user_attn_output.norm(dim=-1).mean().item(),
+                    "image_output_norm": image_output.norm(dim=-1).mean().item(),
+                    "final_output_norm": final_output.norm(dim=-1).mean().item(),
+                    "delta_norm": delta.norm(dim=-1).mean().item(),
+                }
 
         # Return based on whether we have encoder output
         if encoder_output is not None:
